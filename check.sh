@@ -22,7 +22,7 @@ echo ""
 
 # Check Z3 is installed
 echo "Dependencies"
-if python3 -c "from z3 import *" 2>/dev/null; then
+if python -c "from z3 import *" 2>/dev/null; then
     pass_msg "z3-solver is installed"
 else
     fail_msg "z3-solver not found — run: pip install z3-solver"
@@ -64,7 +64,7 @@ echo ""
 echo "Execution Check"
 for f in p1_z3_warmup.py p2_vcgen.py p3_agent_policy.py p4_tool_chain.py p5_bonus.py; do
     if [ -f "$f" ]; then
-        if python3 "$f" > /dev/null 2>&1; then
+        if python "$f" > /dev/null 2>&1; then
             pass_msg "$f runs without errors"
         else
             warn_msg "$f has runtime errors (check your implementation)"

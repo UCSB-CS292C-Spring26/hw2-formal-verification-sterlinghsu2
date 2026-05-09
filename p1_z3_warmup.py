@@ -15,8 +15,10 @@ def part_a():
     x, y, z = Ints('x y z')
     s = Solver()
 
-    # TODO: Add constraints
-    # s.add(...)
+    s.add(x + 2 * y == z)
+    s.add(z > 10)
+    s.add(x > 0)
+    s.add(y > 0)
 
     print("=== Part (a) ===")
     if s.check() == sat:
@@ -36,8 +38,8 @@ def part_b():
     x = Int('x')
     s = Solver()
 
-    # TODO: Add the *negation* of the formula and check UNSAT
-    # s.add(...)
+    # Negate the formula: ¬(x > 5 → x > 3) ≡ (x > 5 ∧ ¬(x > 3))
+    s.add(Not(Implies(x > 5, x > 3)))
 
     print("=== Part (b) ===")
     result = s.check()
@@ -67,8 +69,9 @@ def part_c():
     f = Function('f', S, S)
     s = Solver()
 
-    # TODO: Add the three constraints
-    # s.add(...)
+    s.add(f(f(x)) == x)
+    s.add(f(f(f(x))) == x)
+    s.add(f(x) != x)
 
     print("=== Part (c) ===")
     result = s.check()
@@ -76,7 +79,30 @@ def part_c():
         print(f"SAT: {s.model()}")
     else:
         print("UNSAT")
-    # TODO: Add Z3 derivation steps below (see STEP 2 above).
+
+    # --- Derivation: WHY is it UNSAT? ---
+
+    # Step 1: From f(f(x)) = x, applying f to both sides gives f(f(f(x))) = f(x).
+    # This is valid because f is a function — equal inputs produce equal outputs.
+    s1 = Solver()
+    step1 = Implies(f(f(x)) == x, f(f(f(x))) == f(x))
+    s1.add(Not(step1))
+    r1 = s1.check()
+    print(f"Step 1: f(f(x))=x  =>  f(f(f(x)))=f(x)  :  {'Valid' if r1 == unsat else 'INVALID'}")
+
+    # Step 2: Combining f(f(f(x))) = f(x) (from step 1) with f(f(f(x))) = x gives f(x) = x.
+    s2 = Solver()
+    step2 = Implies(And(f(f(f(x))) == f(x), f(f(f(x))) == x), f(x) == x)
+    s2.add(Not(step2))
+    r2 = s2.check()
+    print(f"Step 2: f(f(f(x)))=f(x) AND f(f(f(x)))=x  =>  f(x)=x  :  {'Valid' if r2 == unsat else 'INVALID'}")
+
+    # Step 3: f(x) = x contradicts f(x) ≠ x, so the full conjunction is UNSAT.
+    s3 = Solver()
+    step3 = And(f(x) == x, f(x) != x)
+    s3.add(step3)
+    r3 = s3.check()
+    print(f"Step 3: f(x)=x AND f(x)!=x  :  {'UNSAT (contradiction)' if r3 == unsat else 'SAT (unexpected)'}")
     print()
 
 
@@ -97,18 +123,25 @@ def part_d():
     print("=== Part (d) ===")
 
     # Axiom 1: Read-over-write HIT
+    #   i = j  →  Select(Store(a, i, v), j) = v
     s1 = Solver()
-    # TODO: Negate axiom 1 and check UNSAT
-    # s1.add(...)
+    s1.add(Not(Implies(i == j, Select(Store(a, i, v), j) == v)))
     r1 = s1.check()
     print(f"Axiom 1 (hit):  {'Valid' if r1 == unsat else 'INVALID'}")
 
     # Axiom 2: Read-over-write MISS
+    #   i ≠ j  →  Select(Store(a, i, v), j) = Select(a, j)
     s2 = Solver()
-    # TODO: Negate axiom 2 and check UNSAT
-    # s2.add(...)
+    s2.add(Not(Implies(i != j, Select(Store(a, i, v), j) == Select(a, j))))
     r2 = s2.check()
     print(f"Axiom 2 (miss): {'Valid' if r2 == unsat else 'INVALID'}")
+
+    # [EXPLAIN] These two axioms fully characterize Store/Select because they cover
+    # the only two possible relationships between indices i and j: either i = j or
+    # i ≠ j. The hit axiom defines what happens when you read from the index you just
+    # wrote to (you get the new value), and the miss axiom defines what happens when
+    # you read from any other index (the array is unchanged). Together they specify
+    # the result of Select(Store(a,i,v), j) for every possible j, leaving no ambiguity.
     print()
 
 

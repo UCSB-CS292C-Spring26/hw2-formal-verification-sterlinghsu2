@@ -43,7 +43,7 @@ OUTPUT_FILE = 1
 #   ∧ ∀p. p ≠ OUTPUT_FILE → Select(fs_final, p) = Select(fs_initial, p)
 #                                                                  [nothing else changed]
 #
-# TODO: Encode this as a Z3 validity check and verify it.
+# Encoded as a Z3 validity check below.
 # ============================================================================
 
 def verify_correct_composition():
@@ -76,17 +76,17 @@ def verify_correct_composition():
                             Select(fs_final, p) == Select(fs_initial, p)))
     )
 
-    # TODO: Check that (skill_A_post ∧ skill_B_post) → composed_post is valid.
-    # That is, check that the negation is UNSAT.
+    # Check that (skill_A_post AND skill_B_post) -> composed_post is valid.
     s = Solver()
-    # s.add(skill_A_post)
-    # s.add(skill_B_post)
-    # s.add(Not(composed_post))
+    s.add(skill_A_post)
+    s.add(skill_B_post)
+    s.add(Not(composed_post))
 
-    # TODO: uncomment and check
-    # result = s.check()
-
-    print("  TODO: Implement verification")
+    result = s.check()
+    if result == unsat:
+        print("  Verified: composed postcondition holds.")
+    else:
+        print(f"  FAILED: {s.model()}")
     print()
 
 
@@ -101,7 +101,7 @@ def verify_correct_composition():
 #
 # The composed postcondition should FAIL because the input file is modified.
 #
-# TODO: Encode this and show the counterexample.
+# Encoded below; counterexample is printed.
 # ============================================================================
 
 def verify_buggy_composition():
@@ -130,12 +130,25 @@ def verify_buggy_composition():
                             Select(fs_final, p) == Select(fs_initial, p)))
     )
 
-    # TODO: Check that the composed postcondition FAILS.
-    # Print the counterexample showing how the input file gets corrupted.
     s = Solver()
-    # s.add(...)
+    s.add(skill_A_post)
+    s.add(buggy_B_post)
+    s.add(Not(composed_post))
 
-    print("  TODO: Implement buggy verification")
+    result = s.check()
+    if result == sat:
+        m = s.model()
+        print("  FAILED (as expected): composed postcondition does not hold.")
+        print(f"  Counterexample:")
+        print(f"    result_content       = {m.eval(result_content)}")
+        print(f"    fs_initial[INPUT]    = {m.eval(Select(fs_initial, INPUT_FILE))}")
+        print(f"    fs_final[INPUT]      = {m.eval(Select(fs_final, INPUT_FILE))}")
+        print(f"    fs_final[OUTPUT]     = {m.eval(Select(fs_final, OUTPUT_FILE))}")
+        print(f"  The bug: Skill B wrote result_content to INPUT_FILE, overwriting")
+        print(f"  the original input. The composed postcondition requires the input")
+        print(f"  file to be preserved, but it was corrupted.")
+    else:
+        print("  Unexpectedly verified (shouldn't happen)")
     print()
 
 
@@ -148,8 +161,17 @@ def verify_buggy_composition():
 # Cursor, Copilot, etc.) or from what you learned in class. What would a runtime monitor need to check to
 # prevent this class of bugs?
 
-# TODO: Write your explanation here as a comment.
-# ...
+# [EXPLAIN] In real agent workflows, this composition bug manifests when one skill
+# accidentally writes to a file that another skill depends on. For example, in Cursor
+# or Claude Code, a "refactor" skill might read a source file to understand its
+# structure, then a "test generation" skill writes test cases — but if it mistakenly
+# overwrites the original source file instead of creating a new test file, the
+# source code is lost. This is especially common when agents infer output paths from
+# input paths (e.g., writing to the same directory or using similar naming). A runtime
+# monitor could prevent this by tracking which files each skill is allowed to modify
+# via a write-set annotation: Skill A declares it writes nothing, Skill B declares it
+# only writes to OUTPUT_FILE, and the monitor enforces these contracts at each file
+# operation, blocking any write that violates the declared write-set.
 # ============================================================================
 
 
